@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROBLOX OBBY - HARD MODE</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #87CEEB; }
+        canvas { display: block; }
+        
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center;
+            align-items: center; background: rgba(0, 0, 0, 0.8); z-index: 100;
+        }
+
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(255,255,255,0.9); padding: 15px; border-radius: 12px;
+            color: #333; font-weight: bold; display: none;
+            border: 3px solid #ff4444;
+        }
+
+        h1 { color: #ff4444; font-size: 4rem; text-shadow: 3px 3px 0 #000; margin: 0; }
+        button {
+            margin-top: 25px; padding: 15px 60px; font-size: 2rem; 
+            background: #ff4444; border: none; color: white; cursor: pointer; 
+            font-weight: 900; border-radius: 10px; box-shadow: 0 8px 0 #a31d1d;
+        }
+        button:active { transform: translateY(4px); box-shadow: 0 4px 0 #a31d1d; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="menu-main" class="overlay">
+        <h1>HARD MODE</h1>
+        <p style="color: white; font-size: 1.2rem;">Long Gaps • Small Platforms • No Impossible Jumps</p>
+        <button id="start-btn">START CHALLENGE</button>
+    </div>
+
+    <div id="menu-pause" class="overlay hidden">
+        <h1>PAUSED</h1>
+        <button id="resume-btn">RESUME</button>
+    </div>
+
+    <div id="hud">
+        STAGE: <span id="score">0</span><br>
+        ZONE: <span id="zone-txt">1</span>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        let isPaused = false;
+        let gameStarted = false;
+        
+        // HARD MODE CONFIG
+        let config = {
+            gap: 30,       // Far apart
+            size: 6,       // Small platforms
+            speed: 26,     // Faster movement for momentum
+            jumpForce: 16
+        };
+
+        const checkpoint = { pos: new THREE.Vector3(0, 5, 0) };
+
+        class Player {
+            constructor(camera, scene) {
+                this.camera = camera;
+                this.velocity = new THREE.Vector3();
+                this.keys = {};
+                this.isGrounded = false;
+                this.jumpCount = 0;
+                this.raycaster = new THREE.Raycaster();
+
+                window.addEventListener('keydown', e => {
+                    this.keys[e.code] = true;
+                    if(e.code === 'Space') this.jump();
+                });
+                window.addEventListener('keyup', e => this.keys[e.code] = false);
+                window.addEventListener('mousemove', e => {
+                    if (document.pointerLockElement) {
+                        this.camera.rotation.y -= e.movementX * 0.002;
+                        let p = this.camera.rotation.x - e.movementY * 0.002;
+                        this.camera.rotation.x = Math.max(-1.5, Math.min(1.5, p));
+                    }
+                });
+            }
+
+            jump() {
+                if (!document.pointerLockElement) return;
+                if (this.isGrounded || this.jumpCount < 2) {
+                    this.velocity.y = config.jumpForce;
+                    this.jumpCount++;
+                    this.isGrounded = false;
+                }
+            }
+
+            update(dt, blocks) {
+                const move = new THREE.Vector3();
+                if(this.keys['KeyW']) move.z -= 1;
+                if(this.keys['KeyS']) move.z += 1;
+                if(this.keys['KeyA']) move.x -= 1;
+                if(this.keys['KeyD']) move.x += 1;
+                
+                move.applyQuaternion(this.camera.quaternion);
+                move.y = 0;
+                move.normalize();
+
+                this.velocity.x = move.x * config.speed;
+                this.velocity.z = move.z * config.speed;
+                this.velocity.y += -40 * dt; // Stronger gravity for "heavy" feel
+
+                this.raycaster.set(this.camera.position, new THREE.Vector3(0, -1, 0));
+                const hits = this.raycaster.intersectObjects(blocks);
+
+                if(hits.length > 0 && hits[0].distance < 1.9) {
+                    if(this.velocity.y < 0) {
+                        this.velocity.y = 0;
+                        this.isGrounded = true;
+                        this.jumpCount = 0;
+                        this.camera.position.y = hits[0].point.y + 1.8;
+                    }
+                } else { this.isGrounded = false; }
+
+                this.camera.position.add(this.velocity.clone().multiplyScalar(dt));
+                if(this.camera.position.y < -30) this.respawn();
+            }
+
+            respawn() {
+                this.camera.position.copy(checkpoint.pos);
+                this.velocity.set(0, 0, 0);
+            }
+        }
+
+        class Level {
+            constructor(scene) {
+                this.scene = scene;
+                this.blocks = [];
+                this.currentZ = 0;
+                this.colors = [0xff4444, 0x44ff44, 0x4444ff, 0xffff44, 0xff00ff, 0x00ffff];
+                this.spawnPlatform(0, -1, 0, 20, 0xffffff); // Start
+            }
+
+            spawnPlatform(x, y, z, size, color) {
+                const mesh = new THREE.Mesh(
+                    new THREE.BoxGeometry(size, 1, size),
+                    new THREE.MeshStandardMaterial({ color })
+                );
+                mesh.position.set(x, y, z);
+                this.scene.add(mesh);
+                this.blocks.push(mesh);
+            }
+
+            generate(playerZ) {
+                while(this.currentZ > playerZ - 400) {
+                    this.currentZ -= config.gap;
+                    const x = (Math.random() - 0.5) * 15;
+                    const y = (Math.random() - 0.5) * 6; // Higher vertical variance
+                    const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+                    this.spawnPlatform(x, y, this.currentZ, config.size, color);
+                }
+                if(this.blocks.length > 50) this.scene.remove(this.blocks.shift());
+            }
+        }
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 50, 500);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        camera.rotation.order = 'YXZ';
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8), new THREE.DirectionalLight(0xffffff, 1));
+
+        const world = new Level(scene);
+        const player = new Player(camera, scene);
+        const clock = new THREE.Clock();
+
+        function mainLoop() {
+            requestAnimationFrame(mainLoop);
+            if(document.pointerLockElement && !isPaused) {
+                const dt = Math.min(clock.getDelta(), 0.1);
+                player.update(dt, world.blocks);
+                world.generate(camera.position.z);
+                document.getElementById('score').innerText = Math.floor(Math.abs(camera.position.z / config.gap));
+            } else { clock.getDelta(); }
+            renderer.render(scene, camera);
+        }
+
+        document.getElementById('start-btn').onclick = () => {
+            document.getElementById('menu-main').classList.add('hidden');
+            document.getElementById('hud').style.display = 'block';
+            document.body.requestPointerLock();
+            if(!gameStarted) { gameStarted = true; mainLoop(); }
+        };
+
+        document.getElementById('resume-btn').onclick = () => {
+            document.body.requestPointerLock();
+        };
+
+        document.addEventListener('pointerlockchange', () => {
+            isPaused = !document.pointerLockElement;
+            document.getElementById('menu-pause').classList.toggle('hidden', !isPaused);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
